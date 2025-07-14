@@ -8,7 +8,8 @@ from typing import Callable, Optional
 import numpy as np
 import prometheus_client
 
-from vllm.config import SupportsMetricsInfo, VllmConfig
+from vllm.config import SupportsMetricsInfo, VllmConfig, get_sd_window
+# import vllm.config
 from vllm.logger import init_logger
 from vllm.v1.core.kv_cache_utils import PrefixCachingMetrics
 from vllm.v1.engine import FinishReason
@@ -111,15 +112,17 @@ class LoggingStatLogger(StatLoggerBase):
             log_fn = logger.debug
         self.last_generation_throughput = generation_throughput
         self.last_prompt_throughput = prompt_throughput
+        sd_size = get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
 
         # Format and print output.
         log_fn(
             "Engine %03d: "
-            "Avg prompt throughput: %.1f tokens/s, "
+            "ZHSAvg prompt throughput: %.1f tokens/s, "
             "Avg generation throughput: %.1f tokens/s, "
             "Running: %d reqs, Waiting: %d reqs, "
             "GPU KV cache usage: %.1f%%, "
-            "Prefix cache hit rate: %.1f%%",
+            "Prefix cache hit rate: %.1f%%, "
+            "sd_size: %d",
             self.engine_index,
             prompt_throughput,
             generation_throughput,
@@ -127,6 +130,7 @@ class LoggingStatLogger(StatLoggerBase):
             scheduler_stats.num_waiting_reqs,
             scheduler_stats.gpu_cache_usage * 100,
             self.prefix_caching_metrics.hit_rate * 100,
+            sd_size,
         )
         self.spec_decoding_logging.log(log_fn=log_fn)
 

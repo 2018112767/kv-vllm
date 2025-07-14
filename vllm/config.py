@@ -9,6 +9,7 @@ import json
 import textwrap
 import uuid
 import warnings
+from pathlib import Path
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import (MISSING, Field, asdict, dataclass, field, fields,
@@ -91,6 +92,17 @@ _TASK_RUNNER: dict[_ResolvedTask, RunnerType] = {
 HfOverrides = Union[dict[str, Any], Callable[[PretrainedConfig],
                                              PretrainedConfig]]
 
+sd_window = 1
+
+def set_sd_window(path: str, x: int) -> None:
+    Path(path).write_text(str(x))
+    
+def get_sd_window(path: str, default: int = 0) -> int:
+    content = Path(path).read_text().strip()
+    try:
+        return int(content)
+    except ValueError:
+        return default
 
 class SupportsHash(Protocol):
 

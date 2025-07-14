@@ -14,7 +14,7 @@ from vllm.attention.layer import Attention
 from vllm.attention.ops.merge_attn_states import merge_attn_states
 from vllm.attention.utils.fa_utils import (flash_attn_supports_fp8,
                                            get_flash_attn_version)
-from vllm.config import VllmConfig, get_layers_from_vllm_config
+from vllm.config import VllmConfig, get_layers_from_vllm_config, get_sd_window
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
 from vllm.utils import cdiv
@@ -618,6 +618,7 @@ class FlashAttentionImpl(AttentionImpl):
                 scheduler_metadata = attn_metadata.scheduler_metadata
 
             descale_shape = (cu_seqlens_q.shape[0] - 1, key.shape[1])
+            sd_window = get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
 
             flash_attn_varlen_func(
                 q=query[:num_actual_tokens],
@@ -631,7 +632,7 @@ class FlashAttentionImpl(AttentionImpl):
                 softmax_scale=self.scale,
                 causal=True,
                 alibi_slopes=self.alibi_slopes,
-                window_size=self.sliding_window,
+                window_size=((self.sliding_window[0] + 1) // sd_window - 1, self.sliding_window[1]),
                 block_table=block_table,
                 softcap=self.logits_soft_cap,
                 scheduler_metadata=scheduler_metadata,

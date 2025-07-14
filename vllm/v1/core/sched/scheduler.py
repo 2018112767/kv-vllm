@@ -7,7 +7,8 @@ from collections import defaultdict, deque
 from collections.abc import Iterable
 from typing import Any, Optional, Union
 
-from vllm.config import VllmConfig
+# from vllm.config import VllmConfig
+import vllm.config
 from vllm.distributed.kv_events import EventPublisherFactory, KVEventBatch
 from vllm.distributed.kv_transfer.kv_connector.factory import (
     KVConnectorFactory)
@@ -38,7 +39,7 @@ class Scheduler(SchedulerInterface):
 
     def __init__(
         self,
-        vllm_config: VllmConfig,
+        vllm_config: vllm.config.VllmConfig,
         kv_cache_config: KVCacheConfig,
         structured_output_manager: StructuredOutputManager,
         mm_registry: MultiModalRegistry = MULTIMODAL_REGISTRY,
@@ -184,6 +185,20 @@ class Scheduler(SchedulerInterface):
 
         # For logging.
         scheduled_timestamp = time.monotonic()
+        
+        sd_window = vllm.config.get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
+        run_num = len(self.running)
+        wait_num = len(self.waiting)
+        # vllm.config.sd_window = 1
+        if run_num > 2:
+            if wait_num * 2 > run_num:
+                sd_window *= 2
+            elif wait_num == 0:
+                if run_num < 32 * (sd_window // 2):
+                    sd_window = sd_window // 2
+        if sd_window < 1:
+            sd_window = 1
+        vllm.config.set_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", sd_window)
 
         # First, schedule the RUNNING requests.
         req_index = 0

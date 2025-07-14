@@ -9,6 +9,7 @@ from vllm.v1.core.kv_cache_utils import BlockHashType, KVCacheBlock
 from vllm.v1.kv_cache_interface import (FullAttentionSpec, KVCacheSpec,
                                         SlidingWindowSpec)
 from vllm.v1.request import Request
+import vllm.config
 
 
 class SingleTypeKVCacheManager(ABC):
@@ -320,7 +321,8 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
                               num_computed_tokens: int) -> None:
         # Remove the blocks that are no longer be in the sliding window and
         # skipped during the attention computation.
-        last_useful_token = num_computed_tokens - self.sliding_window + 1
+        sd_window = vllm.config.get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
+        last_useful_token = num_computed_tokens - self.sliding_window // sd_window + 1
         last_useful_block = last_useful_token // self.block_size
         blocks = self.req_to_blocks[request_id]
         removed_blocks: list[KVCacheBlock] = []
