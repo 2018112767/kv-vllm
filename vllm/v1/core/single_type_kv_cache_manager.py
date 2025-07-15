@@ -293,14 +293,17 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
         num_contiguous_blocks = 0
 
         match_found = False
+        sd_window = vllm.config.get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
+
         # Search from right to left and early stop when a match is found.
         for i in range(max_num_blocks - 1, -1, -1):
             if cached_block := self.block_pool.get_cached_block(
                     block_hashes[i]):
                 computed_blocks[i] = cached_block
+                
                 num_contiguous_blocks += 1
                 if (num_contiguous_blocks
-                        >= self.sliding_window_contiguous_blocks):
+                        >= (self.sliding_window_contiguous_blocks // sd_window)):
                     # Trim the trailing blocks.
                     # E.g., [NULL, NULL, 8, 3, NULL, 9] -> [NULL, NULL, 8, 3]
                     # when sliding_window_contiguous_blocks=2.

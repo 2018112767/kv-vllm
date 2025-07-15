@@ -104,6 +104,19 @@ def get_sd_window(path: str, default: int = 0) -> int:
     except ValueError:
         return default
 
+
+prev_sd_window = 1
+
+def set_prev_sd_window(path: str, x: int) -> None:
+    Path(path).write_text(str(x))
+    
+def get_prev_sd_window(path: str, default: int = 0) -> int:
+    content = Path(path).read_text().strip()
+    try:
+        return int(content)
+    except ValueError:
+        return default
+
 class SupportsHash(Protocol):
 
     def compute_hash(self) -> str:

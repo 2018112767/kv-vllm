@@ -17,7 +17,7 @@ from vllm.attention.backends.abstract import (AttentionBackend,
 from vllm.attention.layer import Attention
 from vllm.attention.utils.fa_utils import get_flash_attn_version
 from vllm.config import (CompilationLevel, VllmConfig,
-                         get_layers_from_vllm_config)
+                         get_layers_from_vllm_config, get_sd_window, get_prev_sd_window, set_prev_sd_window)
 from vllm.distributed.kv_transfer import (get_kv_transfer_group,
                                           has_kv_transfer_group)
 from vllm.distributed.kv_transfer.kv_connector.v1 import KVConnectorBase_V1
@@ -1115,6 +1115,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         intermediate_tensors: Optional[IntermediateTensors] = None,
     ) -> Union[ModelRunnerOutput, IntermediateTensors]:
 
+        sd_window = get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
+        prev_sd_window = get_prev_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zfs.log", sd_window)
+
         self._update_states(scheduler_output)
         if not scheduler_output.total_num_scheduled_tokens:
             if not has_kv_transfer_group():
@@ -1185,6 +1188,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         else:
             intermediate_tensors = self.sync_and_slice_intermediate_tensors(
                 num_input_tokens, intermediate_tensors, True)
+
+        set_prev_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zfs.log", sd_window)
 
         # Run the decoder.
         # Use persistent buffers for CUDA graphs.

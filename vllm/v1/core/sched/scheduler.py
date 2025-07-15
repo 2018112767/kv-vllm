@@ -199,6 +199,7 @@ class Scheduler(SchedulerInterface):
         if sd_window < 1:
             sd_window = 1
         vllm.config.set_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", sd_window)
+        prev_sd_window = vllm.config.get_prev_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zfs.log", sd_window)
 
         # First, schedule the RUNNING requests.
         req_index = 0
