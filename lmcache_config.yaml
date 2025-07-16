@@ -3,4 +3,4 @@ chunk_size: 256
 
 # CPU offloading configurations
 local_cpu: true
-max_local_cpu_size: 48.0  # 5GB CPU memory limit
+max_local_cpu_size: 256.0  # 5GB CPU memory limit

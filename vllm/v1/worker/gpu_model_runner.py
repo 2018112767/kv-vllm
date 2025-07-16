@@ -303,7 +303,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 self.input_batch, scheduler_output)
         return batch_reordered
 
-    def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
+    def _update_states(self, scheduler_output: "SchedulerOutput", flag: bool) -> None:
         """Update the cached states and the persistent batch with the scheduler
         output.
 
@@ -439,8 +439,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # Update the block IDs.
             if not req_data.resumed_from_preemption:
                 # Append the new blocks to the existing block IDs.
-                for i in range(len(self.kv_cache_config.kv_cache_groups)):
-                    req_state.block_ids[i].extend(req_data.new_block_ids[i])
+                if flag:
+                    req_state.block_ids = req_data.new_block_ids
+                else:
+                    for i in range(len(self.kv_cache_config.kv_cache_groups)):
+                        req_state.block_ids[i].extend(req_data.new_block_ids[i])
             else:
                 # The request is resumed from preemption.
                 # Replace the existing block IDs with the new ones.
@@ -1118,7 +1121,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         sd_window = get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
         prev_sd_window = get_prev_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zfs.log", sd_window)
 
-        self._update_states(scheduler_output)
+        self._update_states(scheduler_output, sd_window < prev_sd_window)
         if not scheduler_output.total_num_scheduled_tokens:
             if not has_kv_transfer_group():
                 # Return empty ModelRunnerOutput if there's no work to do.
@@ -1189,7 +1192,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             intermediate_tensors = self.sync_and_slice_intermediate_tensors(
                 num_input_tokens, intermediate_tensors, True)
 
-        set_prev_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zfs.log", sd_window)
+        # set_prev_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zfs.log", sd_window)
 
         # Run the decoder.
         # Use persistent buffers for CUDA graphs.
@@ -1206,6 +1209,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             )
 
             self.maybe_wait_for_kv_save()
+            set_prev_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zfs.log", sd_window)
+
             finished_sending, finished_recving = (
                 self.get_finished_kv_transfers(scheduler_output))
 

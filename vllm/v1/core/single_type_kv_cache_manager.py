@@ -280,6 +280,8 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
             # the last matched block.
             self.sliding_window_contiguous_blocks += 1
         self._null_block = block_pool.null_block
+        self.sd_window = 1
+        self.prev_sd_window = 1
 
     def find_longest_cache_hit(self, block_hashes: list[BlockHashType],
                                max_length: int) -> list[KVCacheBlock]:
@@ -293,7 +295,7 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
         num_contiguous_blocks = 0
 
         match_found = False
-        sd_window = vllm.config.get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
+        # sd_window = vllm.config.get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
 
         # Search from right to left and early stop when a match is found.
         for i in range(max_num_blocks - 1, -1, -1):
@@ -303,7 +305,7 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
                 
                 num_contiguous_blocks += 1
                 if (num_contiguous_blocks
-                        >= (self.sliding_window_contiguous_blocks // sd_window)):
+                        >= (self.sliding_window_contiguous_blocks // self.sd_window)):
                     # Trim the trailing blocks.
                     # E.g., [NULL, NULL, 8, 3, NULL, 9] -> [NULL, NULL, 8, 3]
                     # when sliding_window_contiguous_blocks=2.
@@ -324,8 +326,8 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
                               num_computed_tokens: int) -> None:
         # Remove the blocks that are no longer be in the sliding window and
         # skipped during the attention computation.
-        sd_window = vllm.config.get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
-        last_useful_token = num_computed_tokens - self.sliding_window // sd_window + 1
+        # sd_window = vllm.config.get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
+        last_useful_token = num_computed_tokens - self.sliding_window // self.sd_window + 1
         last_useful_block = last_useful_token // self.block_size
         blocks = self.req_to_blocks[request_id]
         removed_blocks: list[KVCacheBlock] = []
@@ -349,6 +351,107 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
         """
         return 0
 
+    def find_longest_prev_cache_hit(self, block_hashes: list[BlockHashType],
+                               src_token_id: int) -> list[KVCacheBlock]:
+        max_num_blocks = self.sliding_window_contiguous_blocks // self.sd_window - self.sliding_window_contiguous_blocks // self.prev_sd_window
+        computed_blocks = [self._null_block] * max_num_blocks
+        num_contiguous_blocks = 0
+        start_block = src_token_id // self.block_size
+
+        match_found = False
+        # sd_window = vllm.config.get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
+
+        # Search from right to left and early stop when a match is found.
+        for i in range(max_num_blocks):
+            if cached_block := self.block_pool.get_cached_block(
+                    block_hashes[i + start_block]):
+                computed_blocks[i] = cached_block
+                
+                num_contiguous_blocks += 1
+            else:
+                break
+        del computed_blocks[num_contiguous_blocks:]
+        return computed_blocks
+
+    def get_prev_num_blocks(
+            self, request_id: str, num_tokens: int,
+            new_computed_blocks: list[KVCacheBlock]) -> int:
+        """
+        Get the number of blocks needed to be allocated for the request.
+
+        Args:
+            request_id: The request ID.
+            num_tokens: The total number of tokens that need a slot (including 
+                tokens that are already allocated).
+            new_computed_blocks: The new computed blocks just hitting the
+                prefix caching.
+
+        Returns:
+            The number of blocks.
+        """
+
+        num_required_blocks = self.sliding_window_contiguous_blocks // self.sd_window - self.sliding_window_contiguous_blocks // self.prev_sd_window
+        num_new_blocks = num_required_blocks - len(new_computed_blocks)
+
+        num_evictable_computed_blocks = sum(blk.ref_cnt == 0
+                                            for blk in new_computed_blocks)
+        return ((num_new_blocks + num_evictable_computed_blocks) *
+                self.num_kv_cache_groups)
+
+    def save_prev_computed_blocks(
+            self, request_id: str,
+            new_computed_blocks: list[KVCacheBlock]) -> None:
+        """
+        Add the new computed blocks to the request.
+
+        Args:
+            request_id: The request ID.
+            new_computed_blocks: The new computed blocks just hitting the
+                prefix cache.
+        """
+        if request_id not in self.num_cached_block:
+            return
+        
+        req_blocks = self.req_to_blocks[request_id]
+        # sd_window = vllm.config.get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zfs.log", 1)
+        window_len = self.sliding_window_contiguous_blocks // self.sd_window
+        contiguous_start = len(req_blocks) - window_len
+        for idx in range(len(new_computed_blocks)):
+            req_blocks[contiguous_start + idx] = new_computed_blocks[idx]
+
+    def allocate_prev_blocks(self, request_id: str,
+                            num_blocks_computed: int, block_hashes: list[BlockHashType]) -> list[KVCacheBlock]:
+        """
+        Allocate new blocks for the request to give it at least `num_tokens` 
+        token slots.
+
+        Args:
+            request_id: The request ID.
+
+        Returns:
+            The new allocated blocks.
+        """
+        req_blocks = self.req_to_blocks[request_id]
+        window_len = self.sliding_window_contiguous_blocks // self.sd_window
+        prev_window_len = self.sliding_window_contiguous_blocks // self.prev_sd_window
+        num_new_blocks = window_len - prev_window_len - num_blocks_computed
+        if num_new_blocks <= 0:
+            return []
+        else:
+            new_blocks = self.block_pool.get_new_blocks(
+                num_new_blocks * self.num_kv_cache_groups)
+            contiguous_start = len(req_blocks) - window_len + num_blocks_computed
+            for idx in range(num_new_blocks):
+                blk = new_blocks[idx]
+                req_blocks[contiguous_start + idx] = blk
+                self.block_pool.cached_block_hash_to_block[block_hashes[contiguous_start + idx]][blk.block_id] = blk
+            return new_blocks
+
+    def ignore_token_num(self, total_num: int) -> int:
+        before_token_num = total_num - self.sliding_window // self.sd_window
+        ignore_blk_num = before_token_num // self.block_size
+        ignore_token_num = ignore_blk_num * self.block_size
+        return ignore_token_num
 
 spec_manager_map: dict[type[KVCacheSpec], type[SingleTypeKVCacheManager]] = {
     FullAttentionSpec: FullAttentionManager,

@@ -80,6 +80,8 @@ class Request:
         # State
         # The number of tokens with prefix cache hits.
         self.num_cached_tokens = -1
+        self.sd_window = 1
+        self.sd_prev_window = 1
 
     @classmethod
     def from_engine_core_request(cls, request: EngineCoreRequest) -> "Request":

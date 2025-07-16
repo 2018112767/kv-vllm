@@ -168,6 +168,50 @@ class KVCacheManager:
 
         return KVCacheBlocks(computed_blocks), num_computed_tokens
 
+    def get_prev_computed_blocks(self,
+                            request: Request) -> tuple[KVCacheBlocks, int]:
+        """Get the computed (cached) blocks for the request.
+        Note that the computed blocks must be full.
+
+        Args:
+            request: The request to get the computed blocks.
+
+        Returns:
+            A tuple containing:
+                - A list of blocks that are computed for the request.
+                - The number of computed tokens.
+        """
+        if (not self.enable_caching
+                or request.sampling_params.prompt_logprobs is not None):
+            return KVCacheBlocks.create_empty(), 0
+
+        block_hashes = self.req_to_block_hashes[request.request_id]
+        if not block_hashes:
+            block_hashes = hash_request_tokens(self.caching_hash_fn,
+                                               self.block_size, request)
+            self.req_to_block_hashes[request.request_id] = block_hashes
+
+        # if self.log_stats:
+        #     assert self.prefix_cache_stats is not None
+        #     self.prefix_cache_stats.requests += 1
+
+        max_cache_hit_length = request.num_tokens - 1
+
+        window_len = self.single_type_manager.sliding_window
+        src_token_id = request.num_computed_tokens - window_len // self.single_type_manager.sd_window
+
+        computed_blocks = self.single_type_manager.find_longest_prev_cache_hit(
+            block_hashes, src_token_id)
+
+        num_computed_tokens = len(computed_blocks) * self.block_size
+
+        # if self.log_stats:
+        #     assert self.prefix_cache_stats is not None
+        #     self.prefix_cache_stats.queries += request.num_tokens
+        #     self.prefix_cache_stats.hits += num_computed_tokens
+
+        return KVCacheBlocks(computed_blocks), num_computed_tokens
+
     def allocate_slots(
         self,
         request: Request,
@@ -275,6 +319,58 @@ class KVCacheManager:
         self.single_type_manager.cache_blocks(
             request, self.req_to_block_hashes[request.request_id],
             num_computed_tokens + num_new_tokens - num_draft_tokens)
+
+        return KVCacheBlocks(new_blocks)
+
+    def prev_allocate_slots(
+        self,
+        request: Request,
+        num_new_tokens: int,
+        num_new_computed_tokens: int = 0,
+        new_computed_blocks: Optional[KVCacheBlocks] = None,
+        sd_window: int = 0,
+        prev_sd_window: int = 0,
+    ) -> Optional[KVCacheBlocks]:
+        
+        if num_new_tokens == 0:
+            raise ValueError("num_new_tokens must be greater than 0")
+
+        if sd_window == 0 or prev_sd_window == 0 or sd_window >= prev_sd_window:
+            return None
+
+        if new_computed_blocks is not None:
+            new_computed_block_list = new_computed_blocks.blocks
+        else:
+            new_computed_block_list = []
+
+        num_blocks_to_allocate = (
+            self.single_type_manager.get_prev_num_blocks(
+                request_id=request.request_id,
+                num_tokens=num_new_tokens,
+                new_computed_blocks=new_computed_block_list,
+            ))
+
+        if num_blocks_to_allocate > self.block_pool.get_num_free_blocks():
+            # Cannot allocate new blocks
+            return None
+
+        # Touch the computed blocks to make sure they won't be evicted.
+        if self.enable_caching:
+            self.block_pool.touch(new_computed_block_list)
+        else:
+            assert not new_computed_block_list, (
+                "Computed blocks should be empty when "
+                "prefix caching is disabled")
+
+        # Append the new computed blocks to the request blocks until now to
+        # avoid the case where the new blocks cannot be allocated.
+        self.single_type_manager.save_prev_computed_blocks(
+            request.request_id, new_computed_block_list)
+
+        num_blocks_computed = len(new_computed_block_list)
+
+        new_blocks = self.single_type_manager.allocate_prev_blocks(
+            request.request_id, num_blocks_computed, self.req_to_block_hashes[request.request_id])
 
         return KVCacheBlocks(new_blocks)
 

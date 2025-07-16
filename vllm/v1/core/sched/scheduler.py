@@ -31,6 +31,7 @@ from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.spec_decode.metrics import SpecDecodingStats
 from vllm.v1.structured_output import StructuredOutputManager
+from vllm.v1.core.single_type_kv_cache_manager import SlidingWindowManager
 
 logger = init_logger(__name__)
 
@@ -201,6 +202,10 @@ class Scheduler(SchedulerInterface):
         vllm.config.set_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", sd_window)
         prev_sd_window = vllm.config.get_prev_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zfs.log", sd_window)
 
+        if type(self.kv_cache_manager.single_type_manager) is SlidingWindowManager:
+            self.kv_cache_manager.single_type_manager.sd_window = sd_window
+            self.kv_cache_manager.single_type_manager.prev_sd_window = prev_sd_window
+
         # First, schedule the RUNNING requests.
         req_index = 0
         while req_index < len(self.running) and token_budget > 0:
@@ -248,6 +253,41 @@ class Scheduler(SchedulerInterface):
                 request.num_tokens, 0)
 
             while True:
+                request.sd_window = sd_window
+                if (sd_window < prev_sd_window) and (type(self.kv_cache_manager.single_type_manager) is SlidingWindowManager):
+                    new_computed_blocks, num_new_local_computed_tokens = \
+                        self.kv_cache_manager.get_prev_computed_blocks(
+                            request)
+                    
+                    if (self.connector is not None):
+                        blk_num = self.kv_cache_manager.single_type_manager.ignore_token_num(request.num_computed_tokens)
+
+                        num_external_computed_tokens, load_kv_async = (
+                            self.connector.get_num_new_matched_tokens(
+                                request, blk_num))
+                    
+                    prev_block_num = self.kv_cache_manager.single_type_manager.sliding_window // sd_window - self.kv_cache_manager.single_type_manager.sliding_window // prev_sd_window 
+                    # - num_new_local_computed_tokens
+
+                    prev_new_blocks = self.kv_cache_manager.prev_allocate_slots(
+                        request,
+                        prev_block_num,
+                        num_new_local_computed_tokens,
+                        new_computed_blocks,
+                        sd_window = sd_window,
+                        prev_sd_window = prev_sd_window,
+                    )
+
+                    if num_external_computed_tokens:
+                        assert self.connector is not None
+                        self.connector.update_state_after_alloc(
+                            request,
+                            new_computed_blocks + prev_new_blocks,
+                            num_external_computed_tokens,
+                        )
+
+                request.sd_prev_window = prev_sd_window
+                
                 new_blocks = self.kv_cache_manager.allocate_slots(
                     request,
                     num_new_tokens,
@@ -286,8 +326,13 @@ class Scheduler(SchedulerInterface):
                 # Therefore, we might introduce some additional
                 # cycle to fill in the bitmask, which could be a big no-op.
                 structured_output_request_ids[request.request_id] = req_index
-            req_to_new_block_ids[request.request_id] = (
-                new_blocks.get_block_ids())
+            
+            if sd_window < prev_sd_window:
+                req_to_new_block_ids[request.request_id] = (
+                    self.kv_cache_manager.get_block_ids(request.request_id))
+            else:
+                req_to_new_block_ids[request.request_id] = (
+                    new_blocks.get_block_ids())
             num_scheduled_tokens[request.request_id] = num_new_tokens
             token_budget -= num_new_tokens
             req_index += 1

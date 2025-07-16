@@ -113,7 +113,7 @@ class LoggingStatLogger(StatLoggerBase):
         self.last_generation_throughput = generation_throughput
         self.last_prompt_throughput = prompt_throughput
         sd_size = get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", 1)
-        prev_sd_window = get_prev_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zfs.log", 1)
+        prev_sd_window = get_prev_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zfs.log", sd_size)
 
         # Format and print output.
         log_fn(
