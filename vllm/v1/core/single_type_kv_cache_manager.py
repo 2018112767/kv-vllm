@@ -353,7 +353,9 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
 
     def find_longest_prev_cache_hit(self, block_hashes: list[BlockHashType],
                                src_token_id: int) -> list[KVCacheBlock]:
-        max_num_blocks = self.sliding_window_contiguous_blocks // self.sd_window - self.sliding_window_contiguous_blocks // self.prev_sd_window
+        # ZHS 考虑req长度大于缩小的window但小于扩大的window
+        prefix_max = min(self.sliding_window_contiguous_blocks // self.sd_window, len(block_hashes))
+        max_num_blocks = prefix_max - self.sliding_window_contiguous_blocks // self.prev_sd_window
         computed_blocks = [self._null_block] * max_num_blocks
         num_contiguous_blocks = 0
         start_block = src_token_id // self.block_size
@@ -390,7 +392,9 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
             The number of blocks.
         """
 
-        num_required_blocks = self.sliding_window_contiguous_blocks // self.sd_window - self.sliding_window_contiguous_blocks // self.prev_sd_window
+        # ZHS 被新窗口覆盖但不和旧窗口接触的块
+        num_required_blocks = num_tokens // self.block_size
+        # num_required_blocks = self.sliding_window_contiguous_blocks // self.sd_window - self.sliding_window_contiguous_blocks // self.prev_sd_window
         num_new_blocks = num_required_blocks - len(new_computed_blocks)
 
         num_evictable_computed_blocks = sum(blk.ref_cnt == 0
@@ -416,9 +420,11 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
         # sd_window = vllm.config.get_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zfs.log", 1)
         window_len = self.sliding_window_contiguous_blocks // self.sd_window
         contiguous_start = len(req_blocks) - window_len
+        contiguous_start = max(contiguous_start, 0)
         for idx in range(len(new_computed_blocks)):
             req_blocks[contiguous_start + idx] = new_computed_blocks[idx]
 
+    # ZHS 为从内存中回填的数据分配block
     def allocate_prev_blocks(self, request_id: str,
                             num_blocks_computed: int, block_hashes: list[BlockHashType]) -> list[KVCacheBlock]:
         """
@@ -434,13 +440,14 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
         req_blocks = self.req_to_blocks[request_id]
         window_len = self.sliding_window_contiguous_blocks // self.sd_window
         prev_window_len = self.sliding_window_contiguous_blocks // self.prev_sd_window
-        num_new_blocks = window_len - prev_window_len - num_blocks_computed
+        num_new_blocks = min(window_len, len(req_blocks)) - prev_window_len - num_blocks_computed
         if num_new_blocks <= 0:
             return []
         else:
             new_blocks = self.block_pool.get_new_blocks(
                 num_new_blocks * self.num_kv_cache_groups)
-            contiguous_start = len(req_blocks) - window_len + num_blocks_computed
+            contiguous_start = len(req_blocks) - window_len
+            contiguous_start = max(contiguous_start, 0) + num_blocks_computed
             for idx in range(num_new_blocks):
                 blk = new_blocks[idx]
                 req_blocks[contiguous_start + idx] = blk
@@ -449,6 +456,8 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
 
     def ignore_token_num(self, total_num: int) -> int:
         before_token_num = total_num - self.sliding_window // self.sd_window
+        if before_token_num <= 0:
+            return 0
         ignore_blk_num = before_token_num // self.block_size
         ignore_token_num = ignore_blk_num * self.block_size
         return ignore_token_num

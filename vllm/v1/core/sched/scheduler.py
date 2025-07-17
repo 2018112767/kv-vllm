@@ -35,6 +35,33 @@ from vllm.v1.core.single_type_kv_cache_manager import SlidingWindowManager
 
 logger = init_logger(__name__)
 
+# def change_sd_for_debug(itl_num: int) -> int:
+#     sd = 1
+#     if itl_num == 100:
+#         sd = 2
+#     elif itl_num == 200:
+#         sd = 4
+#     elif itl_num == 300:
+#         sd = 2
+#     elif itl_num == 400:
+#         sd = 1
+#     elif itl_num == 800:
+#         sd = 2
+#     elif itl_num == 900:
+#         sd = 4
+#     elif itl_num == 1000:
+#         sd = 2
+#     elif itl_num == 1100:
+#         sd = 1
+#     elif itl_num == 1400:
+#         sd = 2
+#     elif itl_num == 1500:
+#         sd = 4
+#     elif itl_num == 1600:
+#         sd_ = 2
+#     elif itl_num == 1700:
+#         sd = 1
+#     return sd
 
 class Scheduler(SchedulerInterface):
 
@@ -197,6 +224,13 @@ class Scheduler(SchedulerInterface):
             elif wait_num == 0:
                 if run_num < 32 * (sd_window // 2):
                     sd_window = sd_window // 2
+
+        # elif run_num == 1:
+        #     request = self.running[0]
+        #     itl_num = request.num_computed_tokens
+        #     sd_window = change_sd_for_debug(itl_num)
+            
+
         if sd_window < 1:
             sd_window = 1
         vllm.config.set_sd_window("/home/zhs/workdir/zhs/vllm_zhs/vllm/zhs.log", sd_window)
@@ -254,19 +288,32 @@ class Scheduler(SchedulerInterface):
 
             while True:
                 request.sd_window = sd_window
-                if (sd_window < prev_sd_window) and (type(self.kv_cache_manager.single_type_manager) is SlidingWindowManager):
+                if (
+                    type(self.kv_cache_manager.single_type_manager) is SlidingWindowManager
+                    and sd_window < prev_sd_window
+                    and ( # 缩小后窗口仍大于req长度，则没有必要回填
+                        self.kv_cache_manager.single_type_manager.sliding_window
+                        // prev_sd_window
+                        < request.num_computed_tokens
+                    )
+                ):
+                    # ZHS
+                    # num_new_local_computed_tokens 在新窗口范围内，但是不在旧窗口范围内的，已在显存中的token数
+                    # 上下界都对block_size向下取整
                     new_computed_blocks, num_new_local_computed_tokens = \
                         self.kv_cache_manager.get_prev_computed_blocks(
                             request)
                     
                     if (self.connector is not None):
+                        # ZHS 剃掉LMCache中在扩大后窗口之外的token
                         blk_num = self.kv_cache_manager.single_type_manager.ignore_token_num(request.num_computed_tokens)
 
                         num_external_computed_tokens, load_kv_async = (
                             self.connector.get_num_new_matched_tokens(
                                 request, blk_num))
                     
-                    prev_block_num = self.kv_cache_manager.single_type_manager.sliding_window // sd_window - self.kv_cache_manager.single_type_manager.sliding_window // prev_sd_window 
+                    prefix_tokens_num = min(self.kv_cache_manager.single_type_manager.sliding_window // sd_window, request.num_computed_tokens)
+                    prev_block_num = prefix_tokens_num - self.kv_cache_manager.single_type_manager.sliding_window // prev_sd_window 
                     # - num_new_local_computed_tokens
 
                     prev_new_blocks = self.kv_cache_manager.prev_allocate_slots(
@@ -327,6 +374,7 @@ class Scheduler(SchedulerInterface):
                 # cycle to fill in the bitmask, which could be a big no-op.
                 structured_output_request_ids[request.request_id] = req_index
             
+            # ZHS 重置req的block_ids_list
             if sd_window < prev_sd_window:
                 req_to_new_block_ids[request.request_id] = (
                     self.kv_cache_manager.get_block_ids(request.request_id))

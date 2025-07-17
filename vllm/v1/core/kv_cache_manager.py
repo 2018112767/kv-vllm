@@ -199,6 +199,7 @@ class KVCacheManager:
 
         window_len = self.single_type_manager.sliding_window
         src_token_id = request.num_computed_tokens - window_len // self.single_type_manager.sd_window
+        src_token_id = max(0, src_token_id)
 
         computed_blocks = self.single_type_manager.find_longest_prev_cache_hit(
             block_hashes, src_token_id)
@@ -362,8 +363,7 @@ class KVCacheManager:
                 "Computed blocks should be empty when "
                 "prefix caching is disabled")
 
-        # Append the new computed blocks to the request blocks until now to
-        # avoid the case where the new blocks cannot be allocated.
+        # 修改req的block_ids_list为显存中已有的要回填的块的id
         self.single_type_manager.save_prev_computed_blocks(
             request.request_id, new_computed_block_list)
 
